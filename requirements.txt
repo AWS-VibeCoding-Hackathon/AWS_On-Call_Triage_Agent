@@ -1,0 +1,20 @@
+# AWS SDK
+boto3
+botocore
+
+# Strands Agents
+aws-strands-agents
+
+# Web framework (optional – for serving the UI or exposing endpoints)
+flask
+
+# JSON + data utilities
+pydantic
+python-dotenv
+
+# Metrics + logging helpers
+requests
+tqdm
+
+# For local development convenience
+watchdog
