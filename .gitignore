@@ -4,6 +4,8 @@ __pycache__/
 .DS_Store
 aws_hack/
 *$py.class
+lambda-simulator.zip
+
 
 # C extensions
 *.so
