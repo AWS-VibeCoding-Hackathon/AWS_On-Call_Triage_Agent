@@ -1,340 +1,294 @@
-# agents/metric_analysis_agent.py
-import statistics
-from typing import Dict, Any, List, Optional
+import os
+import json
+import logging
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
-from tools.thresholds_tool import ThresholdsTool
-from incidents.incident_log import IncidentLogger
+import boto3
+
+logger = logging.getLogger(__name__)
+
+SEVERITY_ORDER = ["ok", "warning", "high", "critical"]
+
+LOG_LEVEL_TO_SEVERITY = {
+    "DEBUG": "ok",
+    "INFO": "ok",
+    "WARNING": "warning",
+    "WARN": "warning",
+    "ERROR": "high",
+    "CRITICAL": "critical",
+    "FATAL": "critical",
+}
+
+
+def _max_severity(a: str, b: str) -> str:
+    """Return the higher of two severities based on SEVERITY_ORDER."""
+    try:
+        ia = SEVERITY_ORDER.index(a)
+    except ValueError:
+        ia = 0
+    try:
+        ib = SEVERITY_ORDER.index(b)
+    except ValueError:
+        ib = 0
+    return a if ia >= ib else b
+
+
+def _extract_structured_payload(
+    raw_message: str,
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """
+    CloudWatch Lambda logs usually look like:
+
+      [WARNING]\\t2025-11-24T08:51:19.426Z\\t<requestId>\\t{...json...}
+
+    We want the JSON part + the CloudWatch prefix timestamp so you can
+    cross reference what the agent saw vs the CloudWatch console.
+
+    Returns:
+      (payload_dict or None, cw_timestamp_prefix or None)
+    """
+    if not raw_message:
+        return None, None
+
+    # Split into at most 4 parts: [LEVEL], TS, REQID, JSON
+    parts = raw_message.split("\t", 3)
+    if len(parts) < 4:
+        return None, None
+
+    cw_timestamp_prefix = parts[1].strip()
+    json_part = parts[3].strip()
+
+    try:
+        payload = json.loads(json_part)
+        return payload, cw_timestamp_prefix
+    except Exception:
+        return None, cw_timestamp_prefix
 
 
 class MetricAnalysisAgent:
     """
-    Deterministic metrics analysis.
+    MetricAnalysisAgent
 
-    - Compares metrics against thresholds.json
-    - Produces violations and severity
-    - Writes detailed reasoning into IncidentLogger
+    Hackathon-simple behavior (log-driven mode):
+
+    - We do NOT compute or average numeric CloudWatch metrics here.
+    - Instead, we look at recent CloudWatch Logs in the configured log group
+      within the analysis window.
+    - If we see any WARNING / ERROR / CRITICAL events, we raise severity
+      accordingly based on the highest level seen.
+    - If we see none, overall_severity = "ok".
+
+    Orchestrator behavior is unchanged:
+      - It calls analyze(metrics=..., incident_logger=...).
+      - If overall_severity >= ALERT_SEVERITY_THRESHOLD, it triggers
+        LogAnalysisAgent + RCAAgent.
+
+    This agent also writes human readable messages into thinking_log,
+    including the CloudWatch prefix timestamp and the log payload "message",
+    so you can cross-reference exactly which log lines were used.
     """
 
-    def __init__(self, thresholds_path: Optional[str] = None) -> None:
-        self.thresholds_tool = ThresholdsTool(thresholds_path)
-        self.thresholds = self.thresholds_tool.load_thresholds()
-        self.agent_name = "MetricAnalysisAgent"
+    def __init__(
+        self,
+        cloudwatch_client: Optional[Any] = None,
+        namespace: Optional[str] = None,
+        window_minutes: Optional[int] = None,
+    ) -> None:
+        # Region for CloudWatch Logs
+        aws_region = (
+            os.environ.get("AWS_REGION")
+            or os.environ.get("AWS_DEFAULT_REGION")
+            or "us-east-1"
+        )
+
+        # CloudWatch metrics client (kept for compatibility, even if not used heavily)
+        self.cloudwatch = cloudwatch_client or boto3.client(
+            "cloudwatch", region_name=aws_region
+        )
+
+        # Namespace (not heavily used in this log-driven version, but kept)
+        self.namespace = namespace or os.environ.get(
+            "METRICS_NAMESPACE", "Custom/EcommerceOrderPipeline"
+        )
+
+        # Time window in minutes for analysis
+        if window_minutes is not None:
+            self.window_minutes = window_minutes
+        else:
+            # Default from env, then 10 if not set
+            self.window_minutes = int(os.environ.get("METRICS_WINDOW_MINUTES", "10"))
+
+        # Optional thresholds file at repo root (kept for compatibility)
+        self.thresholds = self._load_thresholds()
+
+        # CloudWatch Logs client to inspect recent log events
+        self.logs_client = boto3.client("logs", region_name=aws_region)
+        self.log_group_name = os.environ.get(
+            "LOG_GROUP_NAME", "/aws/lambda/cloudwatch-log-generator"
+        )
+
+    # ------------------------------------------------------------------ #
+    # Internal helpers
+    # ------------------------------------------------------------------ #
+
+    def _load_thresholds(self) -> Dict[str, Any]:
+        """
+        Load thresholds.json from the repo root. Optional.
+        """
+        try:
+            # agents/metrics_analysis_agent.py -> agents -> repo root
+            repo_root = Path(__file__).resolve().parent.parent
+            thresholds_path = repo_root / "thresholds.json"
+            with thresholds_path.open("r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.warning(
+                "[MetricAnalysisAgent] Failed to load thresholds.json: %s", e
+            )
+            return {}
+
+    def _get_window(self) -> (datetime, datetime):
+        now = datetime.now(timezone.utc)
+        start = now - timedelta(minutes=self.window_minutes)
+        return start, now
+
+    def _severity_from_log_level(self, level: str) -> str:
+        lvl = (level or "").upper()
+        return LOG_LEVEL_TO_SEVERITY.get(lvl, "ok")
+
+    def _fetch_recent_log_events(self) -> List[Dict[str, Any]]:
+        """
+        Pull recent log events from the configured log group within our window.
+        Single page is enough for hackathon usage.
+        """
+        if not self.log_group_name:
+            logger.warning(
+                "MetricAnalysisAgent: LOG_GROUP_NAME is not set. "
+                "Cannot drive severity from logs."
+            )
+            return []
+
+        start, end = self._get_window()
+        start_ms = int(start.timestamp() * 1000)
+        end_ms = int(end.timestamp() * 1000)
+
+        try:
+            response = self.logs_client.filter_log_events(
+                logGroupName=self.log_group_name,
+                startTime=start_ms,
+                endTime=end_ms,
+            )
+            return response.get("events", [])
+        except Exception as e:
+            logger.exception(
+                "MetricAnalysisAgent: failed to fetch recent log events: %s", e
+            )
+            return []
+
+    # ------------------------------------------------------------------ #
+    # Public API
+    # ------------------------------------------------------------------ #
 
     def analyze(
         self,
         metrics: Dict[str, Any],
-        incident_logger: IncidentLogger,
+        incident_logger: Any,
+        *args: Any,
+        **kwargs: Any,
     ) -> Dict[str, Any]:
         """
-        metrics: dict from CloudWatchMetricsTool.get_recent_metrics
-        incident_logger: shared logger for this incident
+        Main entry used by the orchestrator.
+
+        Even though the orchestrator passes `metrics` from CloudWatchMetricsTool,
+        this log-driven agent uses *logs* as the primary signal.
 
         Returns:
-        {
-          "incident_id": ...,
-          "overall_severity": ...,
-          "violations": [...],
-          "summary": ...,
-          "thinking_log": [...],  # local view, same content also written to logger
-        }
+          {
+            "incident_id": ...,
+            "overall_severity": "ok" | "warning" | "high" | "critical",
+            "violations": [...],
+            "summary": "...",
+            "thinking_log": [...]
+          }
         """
-        local_trace: List[str] = []
-
-        lambda_metrics = metrics.get("lambda_metrics", {})
-        custom_metrics = metrics.get("custom_metrics", {})
-
-        incident_logger.add_entry(
-            agent=self.agent_name,
-            stage="start",
-            message="Starting metrics analysis.",
-        )
-        local_trace.append("Starting metrics analysis.")
-
-        violations: List[Dict[str, Any]] = []
-        violations.extend(
-            self._analyze_lambda_metrics(lambda_metrics, local_trace, incident_logger)
-        )
-        violations.extend(
-            self._analyze_custom_metrics(custom_metrics, local_trace, incident_logger)
+        thinking_log: List[str] = []
+        thinking_log.append(
+            "Starting metrics analysis (log-driven incident detection)."
         )
 
-        overall_severity = self._aggregate_severity(violations)
-        summary = self._build_summary(overall_severity, violations)
+        # Use the incident id managed by IncidentLogger so everything lines up
+        incident_id = getattr(incident_logger, "incident_id", None)
 
-        msg = f"Completed metrics analysis. Overall severity: {overall_severity}."
-        incident_logger.add_entry(
-            agent=self.agent_name,
-            stage="end",
-            message=msg,
-            extra={"overall_severity": overall_severity},
-        )
-        local_trace.append(msg)
+        events = self._fetch_recent_log_events()
+        overall_severity = "ok"
+        highest_level = None
+        warning_count = 0
+        high_count = 0
+        critical_count = 0
+
+        for ev in events:
+            raw_message = (ev.get("message") or "").strip()
+            payload, cw_ts = _extract_structured_payload(raw_message)
+
+            if not payload:
+                continue
+
+            level = str(payload.get("level", "INFO")).upper()
+            severity = self._severity_from_log_level(level)
+
+            if severity == "ok":
+                continue
+
+            overall_severity = _max_severity(overall_severity, severity)
+            highest_level = level
+
+            if severity == "warning":
+                warning_count += 1
+            elif severity == "high":
+                high_count += 1
+            elif severity == "critical":
+                critical_count += 1
+
+            # Add a human readable line so you can cross check with CloudWatch
+            thinking_log.append(
+                f"[Log] {cw_ts} | {payload.get('event')} | "
+                f"{payload.get('message')} | severity={severity}"
+            )
+
+        if overall_severity == "ok":
+            summary = "No warning, high, or critical incidents detected in recent logs."
+            violations: List[Dict[str, Any]] = []
+        else:
+            parts = []
+            if warning_count:
+                parts.append(f"{warning_count} warning")
+            if high_count:
+                parts.append(f"{high_count} high")
+            if critical_count:
+                parts.append(f"{critical_count} critical")
+
+            summary = (
+                "Detected elevated incident signals from recent CloudWatch logs: "
+                + ", ".join(parts)
+            )
+
+            violations = [
+                {
+                    "type": "log_level",
+                    "metric": "log_level",
+                    "value": highest_level,
+                    "threshold": "WARNING",
+                }
+            ]
+
+        thinking_log.append(f"Computed overall severity: {overall_severity}")
 
         return {
-            "incident_id": incident_logger.incident_id,
+            "incident_id": incident_id,
             "overall_severity": overall_severity,
             "violations": violations,
             "summary": summary,
-            "thinking_log": local_trace,
+            "thinking_log": thinking_log,
         }
-
-    # internal helpers below are same as before but now also log into IncidentLogger
-
-    def _analyze_lambda_metrics(
-        self,
-        lambda_metrics: Dict[str, Any],
-        local_trace: List[str],
-        incident_logger: IncidentLogger,
-    ) -> List[Dict[str, Any]]:
-        out: List[Dict[str, Any]] = []
-        thresholds = self.thresholds.get("lambda_metrics", {})
-
-        # Errors
-        errors_dp = lambda_metrics.get("errors", [])
-        if errors_dp:
-            total_errors = sum(dp.get("Sum", 0) for dp in errors_dp)
-            text = f"Total Lambda errors in window: {total_errors}"
-            local_trace.append(text)
-            incident_logger.add_entry(
-                agent=self.agent_name,
-                stage="lambda_errors",
-                message=text,
-                extra={"total_errors": total_errors},
-            )
-            cfg = thresholds.get("errors", {})
-            self._check_sum_threshold(
-                source="lambda_metrics",
-                metric_name="errors",
-                total=total_errors,
-                config=cfg,
-                violations=out,
-                local_trace=local_trace,
-                incident_logger=incident_logger,
-            )
-
-        # Throttles
-        throttles_dp = lambda_metrics.get("throttles", [])
-        if throttles_dp:
-            total_throttles = sum(dp.get("Sum", 0) for dp in throttles_dp)
-            text = f"Total Lambda throttles in window: {total_throttles}"
-            local_trace.append(text)
-            incident_logger.add_entry(
-                agent=self.agent_name,
-                stage="lambda_throttles",
-                message=text,
-                extra={"total_throttles": total_throttles},
-            )
-            cfg = thresholds.get("throttles", {})
-            self._check_sum_threshold(
-                source="lambda_metrics",
-                metric_name="throttles",
-                total=total_throttles,
-                config=cfg,
-                violations=out,
-                local_trace=local_trace,
-                incident_logger=incident_logger,
-            )
-
-        # Duration
-        duration_dp = lambda_metrics.get("duration", [])
-        if duration_dp:
-            averages = [dp.get("Average") for dp in duration_dp if "Average" in dp]
-            if averages:
-                avg_duration = statistics.mean(averages)
-                text = f"Average Lambda duration: {avg_duration:.2f} ms"
-                local_trace.append(text)
-                incident_logger.add_entry(
-                    agent=self.agent_name,
-                    stage="lambda_duration",
-                    message=text,
-                    extra={"avg_duration_ms": avg_duration},
-                )
-                cfg = thresholds.get("duration_ms", {})
-                self._check_avg_threshold(
-                    source="lambda_metrics",
-                    metric_name="duration_ms",
-                    avg=avg_duration,
-                    config=cfg,
-                    violations=out,
-                    local_trace=local_trace,
-                    incident_logger=incident_logger,
-                )
-
-        return out
-
-    def _analyze_custom_metrics(
-        self,
-        custom_metrics: Dict[str, Any],
-        local_trace: List[str],
-        incident_logger: IncidentLogger,
-    ) -> List[Dict[str, Any]]:
-        out: List[Dict[str, Any]] = []
-        thresholds = self.thresholds.get("custom_metrics", {})
-
-        for metric_name, datapoints in custom_metrics.items():
-            if not datapoints:
-                continue
-
-            cfg = thresholds.get(metric_name)
-            if not cfg:
-                msg = f"No thresholds configured for custom metric {metric_name}."
-                local_trace.append(msg)
-                incident_logger.add_entry(
-                    agent=self.agent_name,
-                    stage="skip_metric",
-                    message=msg,
-                )
-                continue
-
-            averages = [dp.get("average") for dp in datapoints if "average" in dp]
-            if not averages:
-                msg = f"No average values present for custom metric {metric_name}."
-                local_trace.append(msg)
-                incident_logger.add_entry(
-                    agent=self.agent_name,
-                    stage="skip_metric_no_avg",
-                    message=msg,
-                )
-                continue
-
-            avg_val = statistics.mean(averages)
-            text = f"Average {metric_name} over window: {avg_val:.4f}"
-            local_trace.append(text)
-            incident_logger.add_entry(
-                agent=self.agent_name,
-                stage="custom_metric_avg",
-                message=text,
-                extra={"metric": metric_name, "average": avg_val},
-            )
-
-            self._check_avg_threshold(
-                source="custom_metrics",
-                metric_name=metric_name,
-                avg=avg_val,
-                config=cfg,
-                violations=out,
-                local_trace=local_trace,
-                incident_logger=incident_logger,
-            )
-
-        return out
-
-    def _check_sum_threshold(
-        self,
-        source: str,
-        metric_name: str,
-        total: float,
-        config: Dict[str, Any],
-        violations: List[Dict[str, Any]],
-        local_trace: List[str],
-        incident_logger: IncidentLogger,
-    ) -> None:
-        warn = config.get("warn_sum")
-        crit = config.get("crit_sum")
-
-        if crit is not None and total >= crit:
-            v = {
-                "source": source,
-                "metric": metric_name,
-                "severity": "critical",
-                "value": total,
-                "threshold": crit,
-                "dimension": "sum",
-            }
-            violations.append(v)
-            msg = f"{metric_name} sum {total} exceeded critical threshold {crit}."
-            local_trace.append(msg)
-            incident_logger.add_entry(
-                agent=self.agent_name,
-                stage="threshold_critical",
-                message=msg,
-                extra=v,
-            )
-        elif warn is not None and total >= warn:
-            v = {
-                "source": source,
-                "metric": metric_name,
-                "severity": "warning",
-                "value": total,
-                "threshold": warn,
-                "dimension": "sum",
-            }
-            violations.append(v)
-            msg = f"{metric_name} sum {total} exceeded warning threshold {warn}."
-            local_trace.append(msg)
-            incident_logger.add_entry(
-                agent=self.agent_name,
-                stage="threshold_warning",
-                message=msg,
-                extra=v,
-            )
-
-    def _check_avg_threshold(
-        self,
-        source: str,
-        metric_name: str,
-        avg: float,
-        config: Dict[str, Any],
-        violations: List[Dict[str, Any]],
-        local_trace: List[str],
-        incident_logger: IncidentLogger,
-    ) -> None:
-        warn = config.get("warn_avg")
-        crit = config.get("crit_avg")
-
-        if crit is not None and avg >= crit:
-            v = {
-                "source": source,
-                "metric": metric_name,
-                "severity": "critical",
-                "value": avg,
-                "threshold": crit,
-                "dimension": "average",
-            }
-            violations.append(v)
-            msg = f"{metric_name} average {avg:.4f} exceeded critical threshold {crit}."
-            local_trace.append(msg)
-            incident_logger.add_entry(
-                agent=self.agent_name,
-                stage="threshold_critical",
-                message=msg,
-                extra=v,
-            )
-        elif warn is not None and avg >= warn:
-            v = {
-                "source": source,
-                "metric": metric_name,
-                "severity": "warning",
-                "value": avg,
-                "threshold": warn,
-                "dimension": "average",
-            }
-            violations.append(v)
-            msg = f"{metric_name} average {avg:.4f} exceeded warning threshold {warn}."
-            local_trace.append(msg)
-            incident_logger.add_entry(
-                agent=self.agent_name,
-                stage="threshold_warning",
-                message=msg,
-                extra=v,
-            )
-
-    def _aggregate_severity(self, violations: List[Dict[str, Any]]) -> str:
-        if any(v["severity"] == "critical" for v in violations):
-            return "critical"
-        if any(v["severity"] == "warning" for v in violations):
-            return "warning"
-        return "ok"
-
-    def _build_summary(
-        self, overall_severity: str, violations: List[Dict[str, Any]]
-    ) -> str:
-        if overall_severity == "ok":
-            return "All monitored metrics are within configured thresholds."
-        lines = [f"Overall metrics severity: {overall_severity.upper()}."]
-        for v in violations:
-            lines.append(
-                f"- {v['source']}.{v['metric']} {v['dimension']}="
-                f"{v['value']:.4f} crossed {v['severity']} threshold {v['threshold']}"
-            )
-        return "\n".join(lines)

@@ -54,8 +54,25 @@ class RCAAgent:
         )
         local_trace.append("Starting RCA analysis.")
 
-        metrics_json = json.dumps(metrics_result, indent=2)
-        log_summary_text = str(log_summary)
+        # ------------------------------------------------------------------
+        # IMPORTANT CHANGE: build a compact view of metrics_result
+        # so we do not blow the Titan token limit.
+        # We keep only what the model really needs:
+        #   - overall_severity
+        #   - summary
+        #   - violations
+        #   - a trimmed thinking_log
+        # ------------------------------------------------------------------
+        compact_metrics = self._build_compact_metrics(metrics_result)
+        metrics_json = json.dumps(compact_metrics, indent=2)
+
+        # log_summary is already a short string from LogAnalysisAgent,
+        # but we still guard its length just in case.
+        log_summary_text = str(log_summary or "")
+        if len(log_summary_text) > 4000:
+            log_summary_text = (
+                log_summary_text[:3800] + "\n...[truncated log summary]..."
+            )
 
         prompt = self._build_prompt(metrics_json, log_summary_text)
 
@@ -123,13 +140,45 @@ class RCAAgent:
 
         return rca
 
+    # ------------------------------------------------------------------
+    # NEW: compact metrics builder to avoid token blowups
+    # ------------------------------------------------------------------
+    def _build_compact_metrics(self, metrics_result: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Build a trimmed version of metrics_result so we do not exceed
+        the Titan input token limit.
+
+        We keep:
+          - overall_severity
+          - summary
+          - violations
+          - a short thinking_log (last few lines)
+        Everything else (raw metrics arrays, large payloads) is dropped.
+        """
+        compact: Dict[str, Any] = {}
+
+        compact["overall_severity"] = metrics_result.get("overall_severity")
+        compact["summary"] = metrics_result.get("summary")
+        compact["violations"] = metrics_result.get("violations", [])
+
+        thinking_log = metrics_result.get("thinking_log") or []
+        if isinstance(thinking_log, list):
+            if len(thinking_log) > 10:
+                compact["thinking_log"] = [
+                    "...[truncated thinking log]..."
+                ] + thinking_log[-10:]
+            else:
+                compact["thinking_log"] = thinking_log
+
+        return compact
+
     def _build_prompt(self, metrics_json: str, log_summary_text: str) -> str:
         return "\n".join(
             [
                 "You are an SRE and cloud ops expert performing root cause analysis.",
                 "",
                 "You are given:",
-                "1) Metrics analysis output.",
+                "1) Metrics analysis output (already summarized).",
                 "2) Log analysis summary.",
                 "",
                 "Your job:",
@@ -147,7 +196,7 @@ class RCAAgent:
                 '  "llm_reasoning": "brief explanation of how you arrived at this"',
                 "}",
                 "",
-                "---------------- METRICS ANALYSIS OUTPUT ----------------",
+                "---------------- METRICS ANALYSIS OUTPUT (COMPACT) ----------------",
                 metrics_json,
                 "",
                 "---------------- LOG ANALYSIS SUMMARY -------------------",

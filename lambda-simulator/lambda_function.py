@@ -32,7 +32,7 @@ def log_event(level, event, message, scenario="unknown", **kwargs):
     trace_data = generate_trace_data()
 
     log = {
-        "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+        "ts": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         "level": level,
         "event": event,
         "message": message,
@@ -82,39 +82,62 @@ def publish_metric(name, value, scenario="unknown"):
 # Main Lambda Handler
 # ----------------------------------------------------------
 def lambda_handler(event, context):
+    """
+    For hackathon demo:
+    - Assume a bad 10-minute window where everything is degraded.
+    - Generate a burst of 10 incident events per invocation.
+    - All scenarios are warning/critical severity so the agents will flag incidents.
+    """
 
-    log_event("INFO", "LambdaStart", "Order-processing Lambda invoked")
+    log_event(
+        "INFO",
+        "LambdaStart",
+        "Order-processing Lambda invoked",
+        scenario="incident_burst",
+    )
 
-    # Weighted realistic traffic mix
-    scenario_weights = [
-        (simulate_healthy_order, 0.70),
-        (simulate_minor_degradation, 0.20),
-        (simulate_major_symptom, 0.10),
+    # Only incident-producing scenarios
+    incident_scenarios = [
+        simulate_minor_degradation,
+        simulate_major_symptom,
     ]
 
-    scenarios, weights = zip(*scenario_weights)
-    chosen = random.choices(scenarios, weights=weights, k=1)[0]
-
-    log_event("INFO", "ScenarioChosen", f"Running scenario: {chosen.__name__}")
-
     try:
-        chosen()
-        return {"statusCode": 200, "body": json.dumps({"status": "ok"})}
+        # Burst of 10 bad events in a single invoke
+        for i in range(10):
+            chosen = random.choice(incident_scenarios)
+            log_event(
+                "INFO",
+                "ScenarioChosen",
+                f"Running incident scenario: {chosen.__name__}",
+                scenario="incident_burst",
+                sequence=i + 1,
+            )
+            chosen()
+
+        return {
+            "statusCode": 200,
+            "body": json.dumps({"status": "incident_burst_generated"}),
+        }
 
     except Exception as e:
         log_event(
             "ERROR",
             "ScenarioProcessingIssue",
-            "Observed unexpected behavior during scenario",
+            "Observed unexpected behavior during incident scenario generation",
             error=str(e),
+            scenario="incident_burst",
         )
         return {"statusCode": 500, "body": json.dumps({"status": "processing_issue"})}
 
 
 # ----------------------------------------------------------
-# 1️⃣ HEALTHY ORDERS (MOST TRAFFIC)
+# 1️⃣ HEALTHY ORDERS (KEPT FOR REFERENCE, NOT USED IN INCIDENT MODE)
 # ----------------------------------------------------------
 def simulate_healthy_order():
+    """
+    Not used in the current incident-only mode, but kept so we don't break imports.
+    """
     scenario = "healthy_order"
 
     order_id = random.randint(100000, 999999)
@@ -141,36 +164,42 @@ def simulate_healthy_order():
 
 
 # ----------------------------------------------------------
-# 2️⃣ MINOR DEGREDATION (CACHE SLOW, RETRIES, ETC.)
+# 2️⃣ MINOR DEGRADATION -> FORCED CRITICAL (latency, CPU, memory, retries)
 # ----------------------------------------------------------
 def simulate_minor_degradation():
-    scenario = "minor_degradation"
+    scenario = "minor_degradation_critical"
 
-    delay = random.uniform(1.0, 2.3)
+    # Force high latency (above crit 1500ms) and heavy retries
+    delay = random.uniform(2.0, 3.0)  # 2000–3000ms
     time.sleep(delay)
     latency = int(delay * 1000)
 
-    publish_metric("CPUUtilization", random.uniform(40, 60), scenario)
-    publish_metric("MemoryUsageMB", random.uniform(130, 200), scenario)
-    publish_metric("OrderLatencyMS", latency, scenario)
-    publish_metric("RetryCount", random.randint(1, 3), scenario)
+    # Force CPU and Memory above crit thresholds
+    publish_metric("CPUUtilization", random.uniform(88, 95), scenario)  # crit_avg = 85
+    publish_metric(
+        "MemoryUsageMB", random.uniform(250, 320), scenario
+    )  # crit_avg = 240
+    publish_metric("OrderLatencyMS", latency, scenario)  # crit_avg = 1500
+    publish_metric("RetryCount", random.randint(4, 6), scenario)  # crit_avg = 3
 
     log_event(
         "WARNING",
         "UpstreamResponsiveness",
-        "Upstream response duration exceeded normal profile",
+        "Upstream response duration far above normal profile",
         scenario=scenario,
         latency_ms=latency,
         downstream="user-profile-service",
-        observedRetries=random.randint(1, 2),
+        observedRetries=random.randint(4, 6),
     )
 
 
 # ----------------------------------------------------------
-# 3️⃣ MAJOR SYMPTOMS (NO DIRECT FAIL WORDS)
+# 3️⃣ MAJOR SYMPTOMS (NO DIRECT FAIL WORDS, BUT CLEARLY BAD)
 # ----------------------------------------------------------
 def simulate_major_symptom():
-
+    """
+    Randomly choose one of the symptom patterns, all tuned to be critical.
+    """
     symptom_patterns = [
         heavy_payment_signal,
         inventory_slow_signal,
@@ -182,9 +211,10 @@ def simulate_major_symptom():
 
 
 def heavy_payment_signal():
-    scenario = "payment_signal"
+    scenario = "payment_signal_critical"
 
-    for i in range(random.randint(2, 4)):
+    # Multiple inconsistent authorization patterns + high error rate
+    for i in range(random.randint(3, 5)):
         log_event(
             "WARNING",
             "AuthorizationPatternShift",
@@ -195,22 +225,24 @@ def heavy_payment_signal():
             responseCode=random.choice([202, 207, 299]),
         )
 
-    publish_metric("ErrorRate", random.uniform(0.4, 0.9), scenario)
+    # ErrorRate well above critical 0.05
+    publish_metric("ErrorRate", random.uniform(0.2, 0.6), scenario)
 
 
 def inventory_slow_signal():
-    scenario = "inventory_latency_signal"
+    scenario = "inventory_latency_critical"
 
-    delay = random.uniform(1.8, 4.0)
+    # Make inventory DB latency clearly above crit 900ms
+    delay = random.uniform(1.5, 3.0)  # 1500–3000ms
     time.sleep(delay)
 
-    publish_metric("CPUUtilization", random.uniform(65, 90), scenario)
-    publish_metric("InventoryDBLatencyMS", delay * 1000, scenario)
+    publish_metric("CPUUtilization", random.uniform(90, 97), scenario)  # crit
+    publish_metric("InventoryDBLatencyMS", delay * 1000, scenario)  # crit
 
     log_event(
         "WARNING",
         "ReservationDurationShift",
-        "Inventory reservation observed longer-than-expected duration",
+        "Inventory reservation taking far longer than expected window",
         scenario=scenario,
         observedDurationMS=int(delay * 1000),
         downstream="inventory-service",
@@ -218,17 +250,19 @@ def inventory_slow_signal():
 
 
 def shipping_slow_signal():
-    scenario = "shipping_sla_shift"
+    scenario = "shipping_sla_critical"
 
+    # Force a large delay and multiple downstream timeouts
     delay = random.uniform(2.5, 4.5)
     time.sleep(delay)
 
-    publish_metric("DownstreamTimeouts", 1, scenario)
+    # DownstreamTimeouts above crit 2
+    publish_metric("DownstreamTimeouts", random.randint(3, 5), scenario)
 
     log_event(
         "WARNING",
         "DownstreamResponsiveness",
-        "Shipping workflow response exceeded expected SLA window",
+        "Shipping workflow response severely exceeded SLA window",
         scenario=scenario,
         observedLatencyMS=int(delay * 1000),
         call="POST /createLabel",
@@ -236,16 +270,17 @@ def shipping_slow_signal():
 
 
 def memory_pressure_signal():
-    scenario = "memory_pressure_signal"
+    scenario = "memory_pressure_critical"
 
-    mem = random.uniform(220, 310)
+    # Force memory above crit threshold (240MB)
+    mem = random.uniform(260, 340)
     publish_metric("MemoryUsageMB", mem, scenario)
 
     log_event(
         "WARNING",
         "ResourceConsumptionShift",
-        "Observed elevated memory consumption during payload handling",
+        "Observed sustained elevated memory consumption during payload handling",
         scenario=scenario,
         memoryMB=mem,
-        payloadSizeKB=random.randint(500, 1500),
+        payloadSizeKB=random.randint(800, 2000),
     )
