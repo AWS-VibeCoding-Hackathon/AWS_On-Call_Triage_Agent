@@ -1,4 +1,4 @@
-# 🤖 AWS CloudOps Agent
+# 🤖 AWS On-Call Triage Agent
 
 An AI-powered incident detection and root cause analysis system for AWS CloudWatch. Built with a multi-agent architecture using local LLMs (Llama 3.1) to automatically detect, analyze, and diagnose production incidents.
 
@@ -14,7 +14,7 @@ See the system in action! Watch our [demo video on YouTube](https://www.youtube.
 
 ## 🎯 Overview
 
-CloudOps Agent continuously monitors AWS CloudWatch logs and metrics, using specialized AI agents to:
+On-Call Triage Agent continuously monitors AWS CloudWatch logs and metrics, using specialized AI agents to:
 - 🔍 **Detect incidents** through metric threshold analysis
 - 📊 **Analyze log patterns** to identify error signatures
 - 🎯 **Perform root cause analysis** with actionable recommendations
@@ -428,7 +428,7 @@ For a complete video demonstration, check out our [YouTube demo](https://www.you
 > 
 > Recommendation: 'Investigate user-profile-service, consider circuit breaker, scale inventory service.'"
 
-### Key Talking Points
+### Noteworthy mentions
 
 ✅ **Multi-agent architecture** - Specialized agents for metrics, logs, and RCA  
 ✅ **Token optimization** - 97% reduction while preserving insights  
@@ -520,18 +520,6 @@ echo $AWS_ACCESS_KEY_ID
 - Verify `OLLAMA_HOST` environment variable
 - Reduce time window from 10 to 5 minutes
 - Check system resources (CPU/RAM)
-
-## 📚 Documentation
-
-Additional documentation available:
-
-- [`QUICK_START.md`](QUICK_START.md) - Fast setup guide
-- [`HACKATHON_DEMO.md`](HACKATHON_DEMO.md) - Demo strategies
-- [`DASHBOARD_GUIDE.md`](DASHBOARD_GUIDE.md) - Dashboard details
-- [`INCIDENT_FILES_STRUCTURE.md`](INCIDENT_FILES_STRUCTURE.md) - File format specs
-- [`TOKEN_OPTIMIZATION.md`](TOKEN_OPTIMIZATION.md) - Token reduction details
-- [`BUG_FIXES.md`](BUG_FIXES.md) - Issue resolution log
-- [`TASK_COMPLETED.md`](TASK_COMPLETED.md) - Development summary
 
 ## 🔄 Continuous Monitoring (Optional)
 
