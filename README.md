@@ -1,4 +1,4 @@
-# 🤖 AWS On-Call Triage Agent
+#  AWS On-Call Triage Agent
 
 An AI-powered incident detection and root cause analysis system for AWS CloudWatch. Built with a multi-agent architecture using local LLMs (Llama 3.1) to automatically detect, analyze, and diagnose production incidents.
 
@@ -6,7 +6,7 @@ An AI-powered incident detection and root cause analysis system for AWS CloudWat
 ![AWS](https://img.shields.io/badge/AWS-CloudWatch-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
-## 🎥 Demo Video
+##  Demo Video
 
 [![Watch Demo](https://img.shields.io/badge/▶️_Watch-Demo_Video-red?style=for-the-badge&logo=youtube)](https://www.youtube.com/watch?v=8-itfsCbIWY)
 
