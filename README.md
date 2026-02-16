@@ -12,14 +12,14 @@ An AI-powered incident detection and root cause analysis system for AWS CloudWat
 
 See the system in action! Watch our [demo video on YouTube](https://www.youtube.com/watch?v=8-itfsCbIWY) to see how the AI agents detect incidents, perform root cause analysis, and provide actionable recommendations in real-time.
 
-## 🎯 Overview
+##  Overview
 
 On-Call Triage Agent continuously monitors AWS CloudWatch logs and metrics, using specialized AI agents to:
-- 🔍 **Detect incidents** through metric threshold analysis
-- 📊 **Analyze log patterns** to identify error signatures
-- 🎯 **Perform root cause analysis** with actionable recommendations
-- 📈 **Visualize incidents** through an interactive dashboard
-- 💾 **Maintain audit trails** with structured incident logging
+-  **Detect incidents** through metric threshold analysis
+-  **Analyze log patterns** to identify error signatures
+-  **Perform root cause analysis** with actionable recommendations
+-  **Visualize incidents** through an interactive dashboard
+-  **Maintain audit trails** with structured incident logging
 
 ### Key Features
 
@@ -31,7 +31,7 @@ On-Call Triage Agent continuously monitors AWS CloudWatch logs and metrics, usin
 - **Interactive Dashboard**: Streamlit-based UI with auto-refresh and trend visualization
 - **AWS Native**: Integrates seamlessly with CloudWatch Logs and Metrics
 
-## 🏗️ Architecture
+##  Architecture
 
 ```
 ┌─────────────────────┐
@@ -86,7 +86,7 @@ On-Call Triage Agent continuously monitors AWS CloudWatch logs and metrics, usin
 └─────────────────────┘
 ```
 
-## 📦 Installation
+##  Installation
 
 ### Prerequisites
 
@@ -184,7 +184,7 @@ export AWS_REGION=us-east-1
 python check_credentials.py
 ```
 
-## 🚀 Quick Start
+##  Quick Start
 
 ### Basic Usage
 
@@ -203,22 +203,22 @@ python start_incident_assistant.py
    - CPUUtilization: 13 datapoints
    - MemoryUsageMB: 13 datapoints
    - OrderLatencyMS: 13 datapoints
-✅ Raw data logged to incident file
+ Raw data logged to incident file
 
-🤖 Running Metrics Analysis Agent...
+ Running Metrics Analysis Agent...
    📏 Raw metrics size: 20,347 chars → Preprocessed for LLM
    Severity: critical
 
-⚠️  INCIDENT DETECTED! Running deeper analysis...
+  INCIDENT DETECTED! Running deeper analysis...
 
-🤖 Running Log Analysis Agent...
+ Running Log Analysis Agent...
    📏 Raw logs size: 152,834 chars → Preprocessed for LLM
    Issues detected: 5
 
-🤖 Running RCA Agent...
+ Running RCA Agent...
    Root cause: High CPU utilization (92%+), memory pressure...
 
-✅ Incident analysis complete!
+ Incident analysis complete!
 ============================================================
 ```
 
@@ -230,10 +230,10 @@ streamlit run dashboard.py
 ```
 
 Dashboard opens at `http://localhost:8501` and displays:
-- 📊 Incident metrics (total, critical, high, warning)
-- 🔍 Detailed incident cards with RCA and recommendations
-- 📈 Trend visualization and severity distribution
-- 🔄 Auto-refresh capability
+-  Incident metrics (total, critical, high, warning)
+-  Detailed incident cards with RCA and recommendations
+-  Trend visualization and severity distribution
+-  Auto-refresh capability
 
 ## 📁 Project Structure
 
@@ -315,7 +315,7 @@ max_info_samples = 5        # Info log samples
 max_metric_stats = 10       # Aggregated metric statistics
 ```
 
-## 📊 Dashboard Guide
+##  Dashboard Guide
 
 ### Installation
 
@@ -354,9 +354,9 @@ streamlit run dashboard.py
    - Auto-refresh toggle
    - Manual refresh button
 
-## 🎬 Demo / Hackathon Guide
+##  Demo / Hackathon Guide
 
-### 📹 Video Walkthrough
+###  Video Walkthrough
 
 For a complete video demonstration, check out our [YouTube demo](https://www.youtube.com/watch?v=8-itfsCbIWY) showing the entire workflow in action.
 
@@ -430,15 +430,15 @@ For a complete video demonstration, check out our [YouTube demo](https://www.you
 
 ### Noteworthy mentions
 
-✅ **Multi-agent architecture** - Specialized agents for metrics, logs, and RCA  
-✅ **Token optimization** - 97% reduction while preserving insights  
-✅ **Real-time monitoring** - Can run continuously in production  
-✅ **Structured logging** - Complete audit trail in JSONL  
-✅ **AWS native** - Uses CloudWatch Logs and Metrics  
-✅ **AI-powered** - Local LLM for privacy (no data leaves your network)  
-✅ **Extensible** - Easy to add new agents or data sources  
+ **Multi-agent architecture** - Specialized agents for metrics, logs, and RCA  
+ **Token optimization** - 97% reduction while preserving insights  
+ **Real-time monitoring** - Can run continuously in production  
+ **Structured logging** - Complete audit trail in JSONL  
+ **AWS native** - Uses CloudWatch Logs and Metrics  
+ **AI-powered** - Local LLM for privacy (no data leaves your network)  
+ **Extensible** - Easy to add new agents or data sources  
 
-## 🧪 Testing
+##  Testing
 
 ### Run Unit Tests
 
@@ -468,7 +468,7 @@ python lambda_function.py
 python run_multi_incident_analysis.py
 ```
 
-## 🐛 Troubleshooting
+##  Troubleshooting
 
 ### Ollama Token Limit Warnings
 
@@ -510,7 +510,7 @@ echo $AWS_ACCESS_KEY_ID
 **Solutions:**
 - Run `python start_incident_assistant.py` at least once
 - Verify `incident_logs/` directory exists
-- Click "🔄 Refresh Now" button
+- Click " Refresh Now" button
 - Check file permissions
 
 ### Slow Analysis Performance
@@ -521,7 +521,7 @@ echo $AWS_ACCESS_KEY_ID
 - Reduce time window from 10 to 5 minutes
 - Check system resources (CPU/RAM)
 
-## 🔄 Continuous Monitoring (Optional)
+##  Continuous Monitoring (Optional)
 
 To run continuous monitoring instead of single execution:
 
@@ -548,19 +548,19 @@ aws events put-rule \
   --schedule-expression "rate(5 minutes)"
 ```
 
-## 🎯 Success Metrics
+##  Success Metrics
 
 The system successfully:
 
-✅ Detects incidents with 97% token reduction  
-✅ Analyzes 7 metric types + log events  
-✅ Generates RCA in 30-60 seconds  
-✅ Creates structured audit trails with unique IDs  
-✅ Provides actionable recommendations  
-✅ Visualizes trends in interactive dashboard  
-✅ Maintains data integrity with raw dumps  
+ Detects incidents with 97% token reduction  
+ Analyzes 7 metric types + log events  
+ Generates RCA in 30-60 seconds  
+ Creates structured audit trails with unique IDs  
+ Provides actionable recommendations  
+ Visualizes trends in interactive dashboard  
+ Maintains data integrity with raw dumps  
 
-## 🤝 Contributing
+##  Contributing
 
 Contributions are welcome! Areas for improvement:
 
@@ -571,18 +571,18 @@ Contributions are welcome! Areas for improvement:
 - Machine learning for threshold tuning
 - Multi-region support
 
-## 📄 License
+##  License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
-## 🙏 Acknowledgments
+##  Acknowledgments
 
 - Built with [Strands Agents](https://github.com/strands-ai/strands-agents) framework
 - Powered by [Ollama](https://ollama.ai) and Llama 3.1
 - Visualization with [Streamlit](https://streamlit.io) and [Plotly](https://plotly.com)
 - Cloud monitoring via [AWS CloudWatch](https://aws.amazon.com/cloudwatch/)
 
-## 📞 Support
+##  Support
 
 For issues, questions, or suggestions:
 
